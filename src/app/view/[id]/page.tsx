@@ -44,5 +44,16 @@ export default async function ViewPage({ params }: { params: Params }) {
     return notFound();
   }
 
-  return <ViewClient initialQuestion={question.question} id={id} />;
+  // Fetch answers for this question
+  let answers: any[] = [];
+  try {
+    answers = await pb.collection("answers").getFullList({
+      filter: `question = "${id}"`,
+      sort: "position",
+    });
+  } catch (error) {
+    console.error("Error fetching answers:", error);
+  }
+
+  return <ViewClient initialQuestion={question.question} id={id} initialAnswers={answers} />;
 }

@@ -4,7 +4,7 @@ import { useRef, useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { Download, ArrowLeft, Type, Plus, Minus, RotateCcw, FilePlus, Trash2, LayoutTemplate, AlignLeft, AlignCenter } from "lucide-react";
+import { Download, ArrowLeft, Type, Plus, Minus, RotateCcw, FilePlus, Trash2, LayoutTemplate, AlignLeft, AlignCenter, Save, GripVertical } from "lucide-react";
 import { toPng } from "html-to-image";
 import { useSearchParams } from "next/navigation";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -13,12 +13,42 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { Textarea } from "@/components/ui/textarea";
+import { saveAnswers } from "../answer-actions";
+import { toast } from "sonner";
+
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  horizontalListSortingStrategy,
+  useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 import { cn } from "@/lib/utils";
+
+interface Answer {
+  id: string;
+  question: string;
+  answer: string;
+  position: number;
+  created: string;
+  updated: string;
+}
 
 type ViewClientProps = {
   initialQuestion: string;
   id: string;
+  initialAnswers: Answer[];
 };
 
 type FontSize = "auto" | "sm" | "md" | "lg" | "xl" | "2xl" | "3xl";
@@ -28,6 +58,7 @@ type SlideTemplate = "centered" | "left";
 
 interface Slide {
   id: string;
+  dbId?: string;
   type: SlideType;
   template: SlideTemplate;
   title?: string;
@@ -35,17 +66,74 @@ interface Slide {
   fontSize: FontSize;
 }
 
-export default function ViewClient({ initialQuestion, id }: ViewClientProps) {
+export default function ViewClient({ initialQuestion, id, initialAnswers }: ViewClientProps) {
   const searchParams = useSearchParams();
   const isAdmin = searchParams.get("admin") === "true";
   const containerRef = useRef<HTMLDivElement>(null);
   const [mounted, setMounted] = useState(false);
   const [isCapturingId, setIsCapturingId] = useState<string | null>(null);
-  const [slides, setSlides] = useState<Slide[]>([
-    { id: "q", type: "question", template: "centered", content: initialQuestion, fontSize: "auto" }
-  ]);
+  const [isSaving, setIsSaving] = useState(false);
+  
+  const [slides, setSlides] = useState<Slide[]>(() => {
+    const questionSlide: Slide = { 
+      id: "q", 
+      type: "question", 
+      template: "centered", 
+      content: initialQuestion, 
+      fontSize: "auto" 
+    };
+    
+    const answerSlides: Slide[] = initialAnswers.map((answer, index) => ({
+      id: `answer-${index}`,
+      dbId: answer.id,
+      type: "answer" as const,
+      template: "left" as const,
+      content: answer.answer,
+      fontSize: "auto" as const,
+    }));
+    
+    return [questionSlide, ...answerSlides];
+  });
+  
   const [scale, setScale] = useState(1);
   const slideRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+
+    if (over && active.id !== over.id) {
+      setSlides((prev) => {
+        const oldIndex = prev.findIndex((s) => s.id === active.id);
+        const newIndex = prev.findIndex((s) => s.id === over.id);
+        const newSlides = arrayMove(prev, oldIndex, newIndex);
+        
+        // Clear any pending save
+        if (saveTimeoutRef.current) {
+          clearTimeout(saveTimeoutRef.current);
+        }
+        
+        // Auto-save after reordering - debounced to prevent duplicate saves
+        saveTimeoutRef.current = setTimeout(() => {
+          handleSave(newSlides);
+          saveTimeoutRef.current = null;
+        }, 300);
+        
+        return newSlides;
+      });
+    }
+  };
 
   useEffect(() => {
     setMounted(true);
@@ -63,6 +151,20 @@ export default function ViewClient({ initialQuestion, id }: ViewClientProps) {
     window.addEventListener("resize", updateScale);
     return () => window.removeEventListener("resize", updateScale);
   }, []);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault();
+        handleSave();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isAdmin, slides, id, isSaving]); // Include dependencies for handleSave
 
   const downloadAsPng = async (slideId: string) => {
     const el = slideRefs.current[slideId];
@@ -159,6 +261,35 @@ export default function ViewClient({ initialQuestion, id }: ViewClientProps) {
     setSlides(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
   };
 
+  const handleSave = async (currentSlides?: Slide[]) => {
+    setIsSaving(true);
+    const slidesToSave = currentSlides || slides;
+    try {
+      const answerSlides = slidesToSave
+        .filter(s => s.type === "answer")
+        .map((slide, index) => ({
+          dbId: slide.dbId,
+          template: slide.template,
+          content: slide.content,
+          fontSize: slide.fontSize,
+          position: index,
+        }));
+
+      const result = await saveAnswers(id, answerSlides);
+      
+      if (result.success) {
+        toast.success("Answers saved automatically!");
+      } else {
+        toast.error(result.error || "Failed to save answers");
+      }
+    } catch (error) {
+      console.error("Error saving:", error);
+      toast.error("Failed to save answers");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const renderInnerContent = (slide: Slide) => {
     const isCentered = slide.template === "centered";
     const commonClasses = "leading-relaxed prose prose-neutral dark:prose-invert transition-all duration-200";
@@ -245,6 +376,26 @@ export default function ViewClient({ initialQuestion, id }: ViewClientProps) {
             <TooltipContent side="right">Add Answer Page</TooltipContent>
           </Tooltip>
 
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button 
+                variant="default" 
+                size="icon" 
+                className="rounded-xl"
+                onClick={() => handleSave()}
+                disabled={isSaving}
+              >
+                <Save className="h-5 w-5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              <div className="flex items-center gap-2">
+                <span>{isSaving ? "Saving..." : "Save All"}</span>
+                {!isSaving && <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground opacity-100 italic">⌘S</kbd>}
+              </div>
+            </TooltipContent>
+          </Tooltip>
+
           <div className="mt-auto">
             <ThemeToggle />
           </div>
@@ -254,56 +405,47 @@ export default function ViewClient({ initialQuestion, id }: ViewClientProps) {
       {/* Main Artboard Area */}
       <main 
         ref={containerRef}
-        className="flex-1 relative bg-muted/5 overflow-x-auto overflow-y-hidden flex items-center px-12 gap-16"
+        className="flex-1 relative bg-muted/5 overflow-x-auto overflow-y-hidden flex items-center px-12 gap-16 overscroll-x-none"
+        style={{ overscrollBehaviorX: 'none' }}
       >
-        {slides.map((slide, index) => (
-          <div key={slide.id} className="flex flex-col gap-4 items-center shrink-0">
-            {/* Header Controls for each Slide */}
-            <div className="flex items-center gap-2 opacity-50 hover:opacity-100 transition-opacity">
-               <div className="flex bg-muted/50 rounded-lg p-0.5 border border-border">
-                <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md" onClick={() => updateSlideFontSize(slide.id, "up")}>
-                  <Plus className="h-3 w-3" />
-                </Button>
-                <div className="flex items-center px-1">
-                  <Type className="h-3 w-3" />
-                </div>
-                <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md" onClick={() => updateSlideFontSize(slide.id, "down")}>
-                  <Minus className="h-3 w-3" />
-                </Button>
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
-                  className={cn("h-7 w-7 rounded-md", slide.fontSize === "auto" && "text-primary")} 
-                  onClick={() => updateSlideFontSize(slide.id, "auto")}
-                >
-                  <RotateCcw className="h-3 w-3" />
-                </Button>
-              </div>
-
-              <div className="flex bg-muted/50 rounded-lg p-0.5 border border-border px-1">
-                <Button variant="ghost" size="icon" className={cn("h-7 w-7 rounded-md", slide.template === "left" && "text-primary bg-background")} onClick={() => toggleTemplate(slide.id)}><AlignLeft className="h-3 w-3" /></Button>
-                <Button variant="ghost" size="icon" className={cn("h-7 w-7 rounded-md", slide.template === "centered" && "text-primary bg-background")} onClick={() => toggleTemplate(slide.id)}><AlignCenter className="h-3 w-3" /></Button>
-              </div>
-
-              <Button 
-                variant="default" 
-                size="icon" 
-                className="h-8 w-8 rounded-lg shadow-sm"
-                onClick={() => downloadAsPng(slide.id)}
-                disabled={isCapturingId === slide.id}
-              >
-                <Download className="h-4 w-4" />
-              </Button>
-
-              {slide.type === "answer" && (
-                <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-destructive hover:bg-destructive/10" onClick={() => removeSlide(slide.id)}>
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              )}
-            </div>
-
-            <div 
-              className="relative shadow-[0_32px_64px_-12px_rgba(0,0,0,0.2)] bg-background transition-all duration-300 ease-out"
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext
+            items={slides.map(s => s.id)}
+            strategy={horizontalListSortingStrategy}
+          >
+            {slides.map((slide, index) => (
+              <SortableSlide
+                key={slide.id}
+                slide={slide}
+                index={index}
+                isAdmin={isAdmin}
+                isCapturingId={isCapturingId}
+                scale={scale}
+                slideRefs={slideRefs}
+                updateSlideFontSize={updateSlideFontSize}
+                toggleTemplate={toggleTemplate}
+                downloadAsPng={downloadAsPng}
+                removeSlide={removeSlide}
+                updateSlideData={updateSlideData}
+                renderInnerContent={renderInnerContent}
+                getFontSizeClass={getFontSizeClass}
+              />
+            ))}
+          </SortableContext>
+        </DndContext>
+        
+        {isAdmin && (
+          <div className="flex flex-col gap-4 items-center shrink-0">
+            {/* Spacer for controls alignment */}
+            <div className="h-8 w-8" />
+            
+            <button 
+              onClick={addAnswerSlide}
+              className="relative group border-2 border-dashed border-border/40 hover:border-primary/40 bg-muted/5 hover:bg-muted/10 transition-all duration-300 ease-out rounded-sm flex items-center justify-center cursor-pointer overflow-hidden"
               style={{ 
                 width: '600px', 
                 height: '600px',
@@ -311,76 +453,20 @@ export default function ViewClient({ initialQuestion, id }: ViewClientProps) {
                 transformOrigin: 'top center'
               }}
             >
-              <div className="absolute inset-0 border border-border pointer-events-none z-10 opacity-30" />
-              
-              <div 
-                ref={el => { slideRefs.current[slide.id] = el }} 
-                className="w-[600px] h-[600px] bg-background flex flex-col p-16 overflow-hidden"
-              >
-                <div className="w-full max-w-[440px] mx-auto flex flex-col h-full">
-                  {slide.type === "question" && (
-                    <header className={cn("flex flex-col gap-1", slide.template === "centered" ? "items-center text-center" : "items-start text-left")}>
-                      <h1 className="text-xl font-black tracking-tighter text-foreground uppercase opacity-90">
-                        Ask me anything
-                      </h1>
-                      <p className="text-muted-foreground text-[10px] font-bold opacity-50 uppercase tracking-widest leading-none">
-                        Anonymous Message
-                      </p>
-                    </header>
-                  )}
-
-                  <div className={cn("relative flex-1 flex flex-col", slide.template === "centered" ? "justify-center" : "justify-start pt-12")}>
-                    {slide.template === "centered" ? (
-                      <div className="bg-muted/30 backdrop-blur-sm border border-border rounded-2xl px-10 py-12 min-h-[220px] flex items-center justify-center relative">
-                        <div className="absolute top-4 left-4 text-muted-foreground/10 text-4xl font-serif select-none">"</div>
-                        {renderInnerContent(slide)}
-                        <div className="absolute bottom-4 right-4 text-muted-foreground/10 text-4xl font-serif select-none">"</div>
-                      </div>
-                    ) : (
-                      renderInnerContent(slide)
-                    )}
-                  </div>
-
-                  <footer className={cn("flex flex-col gap-4 mt-auto pt-8", slide.template === "centered" ? "items-center text-center" : "items-start text-left")}>
-                    <div className="h-[1px] w-8 bg-border opacity-30" />
-                    <div className={cn("flex flex-col gap-1", slide.template === "centered" ? "items-center" : "items-start")}>
-                      <p className="text-[10px] text-muted-foreground/40 font-bold">
-                        Tech · Career · Software Engineering · Vibe Code
-                      </p>
-                      <span className="text-[11px] text-foreground/30 font-bold select-none tracking-tight">
-                        ask.zafranudin.my
-                      </span>
-                    </div>
-                  </footer>
+              <div className="flex flex-col items-center gap-4 transition-transform duration-300 group-hover:scale-110">
+                <div className="w-16 h-16 rounded-full bg-background border border-border flex items-center justify-center shadow-sm group-hover:shadow-md group-hover:border-primary/30 transition-all">
+                  <Plus className="h-8 w-8 text-muted-foreground/40 group-hover:text-primary/60 transition-colors" />
                 </div>
+                <span className="text-xs font-bold uppercase tracking-[0.2em] text-muted-foreground/30 group-hover:text-primary/50 transition-colors">Add Page</span>
               </div>
-
-              {/* Editable Fields Overlay (Only visible in editor, not in capture) */}
-              {isCapturingId !== slide.id && slide.type === "answer" && (
-                <div className="absolute inset-0 bg-background/95 p-8 flex flex-col gap-6 z-30 opacity-0 hover:opacity-100 transition-all duration-300">
-
-                   <div className="space-y-2 flex-1 flex flex-col">
-                     <label className="text-xs font-medium text-muted-foreground">Content</label>
-                      <Textarea 
-                         value={slide.content} 
-                         onChange={(e) => updateSlideData(slide.id, { content: e.target.value })}
-                         placeholder="Type your narrative (Markdown supported)..."
-                         className="flex-1 resize-none leading-relaxed font-mono text-sm"
-                       />
-                   </div>
-                   <div className="flex justify-between items-center text-[10px] text-muted-foreground/40 font-mono uppercase tracking-widest">
-                     <span>{slide.template.toUpperCase()} Template</span>
-                     <span className="italic">Hover out to preview</span>
-                   </div>
-                </div>
-              )}
-            </div>
+            </button>
             
-            <span className="text-[10px] font-black font-mono text-muted-foreground/20 uppercase tracking-[0.3em]">
-              Page {index + 1}
+            <span className="text-[10px] font-black font-mono text-muted-foreground/10 uppercase tracking-[0.3em] select-none">
+              New Artboard
             </span>
           </div>
-        ))}
+        )}
+
 
         {/* Info Overlay */}
         <div className="fixed bottom-6 right-6 text-[10px] font-mono text-muted-foreground/40 pointer-events-none uppercase tracking-widest flex gap-4">
@@ -389,6 +475,170 @@ export default function ViewClient({ initialQuestion, id }: ViewClientProps) {
           <span>SYSTEM v2.5</span>
         </div>
       </main>
+    </div>
+  );
+}
+
+function SortableSlide({ 
+  slide, 
+  index, 
+  isAdmin, 
+  isCapturingId, 
+  scale, 
+  slideRefs, 
+  updateSlideFontSize, 
+  toggleTemplate, 
+  downloadAsPng, 
+  removeSlide, 
+  updateSlideData, 
+  renderInnerContent,
+  getFontSizeClass 
+}: any) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging
+  } = useSortable({ id: slide.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 50 : undefined,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style} className="flex flex-col gap-4 items-center shrink-0">
+      {/* Header Controls for each Slide */}
+      {isAdmin && (
+        <div className="flex items-center gap-2 opacity-50 hover:opacity-100 transition-opacity">
+          <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md cursor-grab active:cursor-grabbing" {...attributes} {...listeners}>
+            <GripVertical className="h-3 w-3" />
+          </Button>
+
+          <div className="flex bg-muted/50 rounded-lg p-0.5 border border-border">
+            <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md" onClick={() => updateSlideFontSize(slide.id, "up")}>
+              <Plus className="h-3 w-3" />
+            </Button>
+            <div className="flex items-center px-1">
+              <Type className="h-3 w-3" />
+            </div>
+            <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md" onClick={() => updateSlideFontSize(slide.id, "down")}>
+              <Minus className="h-3 w-3" />
+            </Button>
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              className={cn("h-7 w-7 rounded-md", slide.fontSize === "auto" && "text-primary")} 
+              onClick={() => updateSlideFontSize(slide.id, "auto")}
+            >
+              <RotateCcw className="h-3 w-3" />
+            </Button>
+          </div>
+
+          <div className="flex bg-muted/50 rounded-lg p-0.5 border border-border px-1">
+            <Button variant="ghost" size="icon" className={cn("h-7 w-7 rounded-md", slide.template === "left" && "text-primary bg-background")} onClick={() => toggleTemplate(slide.id)}><AlignLeft className="h-3 w-3" /></Button>
+            <Button variant="ghost" size="icon" className={cn("h-7 w-7 rounded-md", slide.template === "centered" && "text-primary bg-background")} onClick={() => toggleTemplate(slide.id)}><AlignCenter className="h-3 w-3" /></Button>
+          </div>
+
+          <Button 
+            variant="default" 
+            size="icon" 
+            className="h-8 w-8 rounded-lg shadow-sm"
+            onClick={() => downloadAsPng(slide.id)}
+            disabled={isCapturingId === slide.id}
+          >
+            <Download className="h-4 w-4" />
+          </Button>
+
+          {slide.type === "answer" && (
+            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-destructive hover:bg-destructive/10" onClick={() => removeSlide(slide.id)}>
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+      )}
+
+      {/* Actual Slide Card */}
+      <div 
+        className="relative shadow-[0_32px_64px_-12px_rgba(0,0,0,0.2)] bg-background transition-all duration-300 ease-out"
+        style={{ 
+          width: '600px', 
+          height: '600px',
+          transform: `scale(${scale})`,
+          transformOrigin: 'top center'
+        }}
+      >
+        <div className="absolute inset-0 border border-border pointer-events-none z-10 opacity-30" />
+        
+        <div 
+          ref={el => { slideRefs.current[slide.id] = el }} 
+          className="w-[600px] h-[600px] bg-background flex flex-col p-16 overflow-hidden"
+        >
+          <div className="w-full max-w-[440px] mx-auto flex flex-col h-full">
+            {slide.type === "question" && (
+              <header className={cn("flex flex-col gap-1", slide.template === "centered" ? "items-center text-center" : "items-start text-left")}>
+                <h1 className="text-xl font-black tracking-tighter text-foreground uppercase opacity-90">
+                  Ask me anything
+                </h1>
+                <p className="text-muted-foreground text-[10px] font-bold opacity-50 uppercase tracking-widest leading-none">
+                  Anonymous Message
+                </p>
+              </header>
+            )}
+
+            <div className={cn("relative flex-1 flex flex-col", slide.template === "centered" ? "justify-center" : "justify-start pt-12")}>
+              {slide.template === "centered" ? (
+                <div className="bg-muted/30 backdrop-blur-sm border border-border rounded-2xl px-10 py-12 min-h-[220px] flex items-center justify-center relative">
+                  <div className="absolute top-4 left-4 text-muted-foreground/10 text-4xl font-serif select-none">"</div>
+                  {renderInnerContent(slide)}
+                  <div className="absolute bottom-4 right-4 text-muted-foreground/10 text-4xl font-serif select-none">"</div>
+                </div>
+              ) : (
+                renderInnerContent(slide)
+              )}
+            </div>
+
+            <footer className={cn("flex flex-col gap-4 mt-auto pt-8", slide.template === "centered" ? "items-center text-center" : "items-start text-left")}>
+              <div className="h-[1px] w-8 bg-border opacity-30" />
+              <div className={cn("flex flex-col gap-1", slide.template === "centered" ? "items-center" : "items-start")}>
+                <p className="text-[10px] text-muted-foreground/40 font-bold">
+                  Tech · Career · Software Engineering · Vibe Code
+                </p>
+                <span className="text-[11px] text-foreground/30 font-bold select-none tracking-tight">
+                  ask.zafranudin.my
+                </span>
+              </div>
+            </footer>
+          </div>
+        </div>
+
+        {/* Editable Fields Overlay (Only visible in editor, not in capture) */}
+        {isAdmin && isCapturingId !== slide.id && slide.type === "answer" && (
+          <div className="absolute inset-0 bg-background/95 p-8 flex flex-col gap-6 z-30 opacity-0 hover:opacity-100 transition-all duration-300">
+             <div className="space-y-2 flex-1 flex flex-col">
+               <label className="text-xs font-medium text-muted-foreground">Content</label>
+                <Textarea 
+                   value={slide.content} 
+                   onChange={(e) => updateSlideData(slide.id, { content: e.target.value })}
+                   placeholder="Type your narrative (Markdown supported)..."
+                   className="flex-1 resize-none leading-relaxed font-mono text-sm"
+                 />
+             </div>
+             <div className="flex justify-between items-center text-[10px] text-muted-foreground/40 font-mono uppercase tracking-widest">
+               <span>{slide.template.toUpperCase()} Template</span>
+               <span className="italic">Hover out to preview</span>
+             </div>
+          </div>
+        )}
+      </div>
+      
+      <span className="text-[10px] font-black font-mono text-muted-foreground/20 uppercase tracking-[0.3em]">
+        Page {index + 1}
+      </span>
     </div>
   );
 }
