@@ -1,6 +1,4 @@
-"use server";
-
-import pb from "@/lib/pocketbase";
+import { getSession } from "@/lib/session";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function GET(
@@ -8,18 +6,31 @@ export async function GET(
   { params }: { params: Promise<{ recordId: string; filename: string }> }
 ) {
   try {
+    // Verify admin session (double-check even though proxy.ts protects /admin/*)
+    const session = await getSession();
+    if (!session) {
+      return NextResponse.json(
+        { error: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
     const { recordId, filename } = await params;
     
-    // Construct the PocketBase file URL
-    const fileUrl = `${process.env.POCKETBASE_URL}/api/files/answers/${recordId}/${filename}`;
+    // Validate record ID format (PocketBase IDs are 15 alphanumeric chars)
+    if (!/^[a-zA-Z0-9]{15}$/.test(recordId)) {
+      return NextResponse.json(
+        { error: "Invalid record ID" },
+        { status: 400 }
+      );
+    }
     
-    // Fetch the file from PocketBase with authentication headers
+    // Construct the PocketBase file URL
+    const fileUrl = `${process.env.POCKETBASE_URL}/api/files/answers/${recordId}/${encodeURIComponent(filename)}`;
+    
+    // Fetch the file from PocketBase with admin token
     const response = await fetch(fileUrl, {
-      headers: pb.authStore.token
-        ? { Authorization: `Bearer ${pb.authStore.token}` }
-        : process.env.POCKETBASE_SECRET_KEY
-        ? { "x-secret-key": process.env.POCKETBASE_SECRET_KEY }
-        : {},
+      headers: { Authorization: `Bearer ${session.token}` },
     });
 
     if (!response.ok) {
@@ -37,7 +48,7 @@ export async function GET(
     return new NextResponse(fileData, {
       headers: {
         "Content-Type": contentType,
-        "Cache-Control": "public, max-age=31536000, immutable",
+        "Cache-Control": "private, max-age=3600",
       },
     });
   } catch (error) {

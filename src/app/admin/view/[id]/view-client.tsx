@@ -6,14 +6,13 @@ import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Download, ArrowLeft, Type, Plus, Minus, RotateCcw, FilePlus, Trash2, LayoutTemplate, AlignLeft, AlignCenter, Save, GripVertical, Grid3x3, Rows3, Image } from "lucide-react";
 import { toPng } from "html-to-image";
-import { useSearchParams } from "next/navigation";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { Textarea } from "@/components/ui/textarea";
-import { saveAnswers, uploadAnswerAttachment, updateAttachmentConfig } from "../answer-actions";
+import { saveAnswers, uploadAnswerAttachment, updateAttachmentConfig, createAnswerSlide } from "../answer-actions";
 import { toast } from "sonner";
 
 import {
@@ -86,8 +85,8 @@ interface Slide {
 }
 
 export default function ViewClient({ initialQuestion, id, initialAnswers, fileToken }: ViewClientProps) {
-  const searchParams = useSearchParams();
-  const isAdmin = searchParams.get("admin") === "true";
+  // Since this is now under /admin route, we're always in admin mode
+  const isAdmin = true;
   const containerRef = useRef<HTMLDivElement>(null);
   const [mounted, setMounted] = useState(false);
   const [isCapturingId, setIsCapturingId] = useState<string | null>(null);
@@ -106,7 +105,7 @@ export default function ViewClient({ initialQuestion, id, initialAnswers, fileTo
     const answerSlides: Slide[] = initialAnswers.map((answer, index) => {
       // Use Next.js API route to proxy file requests (keeps PocketBase URL hidden)
       const attachmentUrl = answer.attachment 
-        ? `/api/files/answers/${answer.id}/${answer.attachment}`
+        ? `/admin/files/answers/${answer.id}/${answer.attachment}`
         : undefined;
       
       // Parse attachment config from database
@@ -285,15 +284,29 @@ export default function ViewClient({ initialQuestion, id, initialAnswers, fileTo
     setSlides(prev => prev.map(s => s.id === slideId ? { ...s, template: s.template === "centered" ? "left" : "centered" } : s));
   };
 
-  const addAnswerSlide = () => {
+  const addAnswerSlide = async () => {
     const newId = Math.random().toString(36).substr(2, 9);
-    setSlides(prev => [...prev, { 
-      id: newId, 
-      type: "answer", 
-      template: "left",
-      content: "# New Section\n\nStart writing your content here...", 
-      fontSize: "auto" 
-    }]);
+    const content = "# New Section\n\nStart writing your content here...";
+    
+    // Get the current position (after all existing slides)
+    const answerCount = slides.filter(s => s.type === "answer").length;
+    
+    // Create the record in the database immediately to get a dbId
+    const result = await createAnswerSlide(id, content, answerCount);
+    
+    if (result.success && result.dbId) {
+      setSlides(prev => [...prev, { 
+        id: newId,
+        dbId: result.dbId, // Now we have a dbId immediately!
+        type: "answer", 
+        template: "left",
+        content: content, 
+        fontSize: "auto" 
+      }]);
+      toast.success("New slide created!");
+    } else {
+      toast.error(result.error || "Failed to create new slide");
+    }
   };
 
   const removeSlide = (id: string) => {
@@ -430,10 +443,11 @@ export default function ViewClient({ initialQuestion, id, initialAnswers, fileTo
     // No attachment - show text only
     if (slide.type === "question") {
       return (
-        <div 
-          className={cn(commonClasses, isCentered ? "font-semibold text-center" : "font-medium text-left", getFontSizeClass(slide))} 
-          dangerouslySetInnerHTML={{ __html: slide.content }} 
-        />
+        <div className={cn(commonClasses, " [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", isCentered ? "font-semibold text-center" : "font-medium text-left", getFontSizeClass(slide))}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {slide.content}
+          </ReactMarkdown>
+        </div>
       );
     }
     
@@ -448,36 +462,6 @@ export default function ViewClient({ initialQuestion, id, initialAnswers, fileTo
 
   if (!mounted) return null;
 
-  if (!isAdmin) {
-    return (
-      <div className="relative min-h-screen bg-background flex flex-col items-center justify-center p-6">
-        <div className="absolute top-4 right-4">
-          <ThemeToggle />
-        </div>
-        <div className="w-full max-w-[440px] space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-1000 ease-out text-center">
-          <header className="space-y-1 text-center">
-            <h1 className="text-xl font-bold tracking-tight text-foreground">Ask me anything</h1>
-            <p className="text-muted-foreground text-[10px] font-medium uppercase tracking-widest opacity-50">Anonymous Message</p>
-          </header>
-          <div className="bg-muted/50 backdrop-blur-sm border border-muted-foreground/20 rounded-xl px-6 py-10 min-h-[200px] flex items-center justify-center">
-            <div 
-              className={cn("font-medium leading-relaxed prose prose-neutral dark:prose-invert text-center", getFontSizeClass(slides[0]))}
-              dangerouslySetInnerHTML={{ __html: initialQuestion }}
-            />
-          </div>
-          <footer className="space-y-2 text-center">
-             <p className="text-[10px] text-muted-foreground/50 font-bold">
-              Tech · Career · Software Engineering · Vibe Code
-            </p>
-            <div className="flex flex-col items-center gap-2">
-              <span className="text-xs text-muted-foreground/70 font-medium select-none">ask.zafranudin.my</span>
-            </div>
-          </footer>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="flex h-screen bg-background overflow-hidden font-geist-sans">
       {/* Left Toolbox */}
@@ -486,7 +470,7 @@ export default function ViewClient({ initialQuestion, id, initialAnswers, fileTo
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="ghost" size="icon" asChild className="rounded-xl">
-                <Link href="/">
+                <Link href="/admin">
                   <ArrowLeft className="h-5 w-5" />
                 </Link>
               </Button>
@@ -555,7 +539,7 @@ export default function ViewClient({ initialQuestion, id, initialAnswers, fileTo
       {/* Main Artboard Area */}
       <main 
         ref={containerRef}
-        className="flex-1 relative bg-muted/5 overflow-auto"
+        className="flex-1 relative bg-muted/30 overflow-auto"
       >
         {viewMode === 'grid' ? (
           /* Grid View */
@@ -813,7 +797,7 @@ function SortableSlide({
       
       if (result.success && result.attachment) {
         // Update the slide with the new attachment (using Next.js API proxy)
-        const attachmentUrl = `/api/files/answers/${slide.dbId}/${result.attachment}`;
+        const attachmentUrl = `/admin/files/answers/${slide.dbId}/${result.attachment}`;
         updateSlideData(slide.id, { 
           attachment: result.attachment,
           attachmentUrl,
@@ -1088,11 +1072,7 @@ function SortableSlide({
              
              <div className="flex justify-between items-center text-[10px] text-muted-foreground/40 font-mono uppercase tracking-widest">
                <span>{slide.template.toUpperCase()} Template</span>
-               {slide.dbId ? (
-                 <span className="italic">Drag & drop image anywhere on card</span>
-               ) : (
-                 <span className="italic text-amber-500">Save first to enable image upload</span>
-               )}
+               <span className="italic">Drag & drop image anywhere on card</span>
              </div>
           </div>
         )}

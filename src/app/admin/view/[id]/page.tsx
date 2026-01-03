@@ -1,14 +1,16 @@
-import pb from "@/lib/pocketbase";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import ViewClient from "./view-client";
 import { Metadata } from "next";
 import { cache } from "react";
+import { getAuthenticatedPb } from "@/lib/pocketbase";
+import { getSession } from "@/lib/session";
+import { requireAdmin } from "../../actions";
 
 type Params = Promise<{ id: string }>;
 
-const getQuestion = cache(async (id: string) => {
+const getQuestion = cache(async (id: string, token: string) => {
+  const pb = getAuthenticatedPb(token);
   try {
-    // viewRule on collection already checks is_published=true
     return await pb.collection("questions").getOne(id);
   } catch (error: any) {
     console.error("PocketBase error fetching question:", {
@@ -22,7 +24,12 @@ const getQuestion = cache(async (id: string) => {
 
 export async function generateMetadata({ params }: { params: Params }): Promise<Metadata> {
   const { id } = await params;
-  const question = await getQuestion(id);
+  const session = await getSession();
+  if (!session) {
+    return { title: "Question Not Found" };
+  }
+  
+  const question = await getQuestion(id, session.token);
   
   if (!question) {
     return {
@@ -37,8 +44,16 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
 }
 
 export default async function ViewPage({ params }: { params: Params }) {
+  await requireAdmin();
+  
+  const session = await getSession();
+  if (!session) {
+    redirect("/admin/login");
+  }
+  
+  const pb = getAuthenticatedPb(session.token);
   const { id } = await params;
-  const question = await getQuestion(id);
+  const question = await getQuestion(id, session.token);
 
   if (!question) {
     return notFound();
@@ -61,3 +76,4 @@ export default async function ViewPage({ params }: { params: Params }) {
 
   return <ViewClient initialQuestion={question.question} id={id} initialAnswers={answers} fileToken={fileToken} />;
 }
+

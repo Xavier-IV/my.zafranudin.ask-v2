@@ -1,6 +1,8 @@
 "use server";
 
-import pb from "@/lib/pocketbase";
+import { getAuthenticatedPb } from "@/lib/pocketbase";
+import { getSession } from "@/lib/session";
+import { requireAdmin } from "../actions";
 
 export interface AnswerSlide {
   dbId?: string;
@@ -15,6 +17,11 @@ export async function uploadAnswerAttachment(
   questionId: string,
   formData: FormData
 ): Promise<{ success: boolean; attachment?: string; error?: string }> {
+  await requireAdmin();
+  const session = await getSession();
+  if (!session) return { success: false, error: "Unauthorized" };
+  const pb = getAuthenticatedPb(session.token);
+
   try {
     // Verify the answer belongs to the question
     const answer = await pb.collection("answers").getOne(answerId);
@@ -45,6 +52,11 @@ export async function updateAttachmentConfig(
   answerId: string,
   config: AttachmentConfig
 ): Promise<{ success: boolean; error?: string }> {
+  await requireAdmin();
+  const session = await getSession();
+  if (!session) return { success: false, error: "Unauthorized" };
+  const pb = getAuthenticatedPb(session.token);
+
   try {
     await pb.collection("answers").update(answerId, {
       attachment_config: JSON.stringify(config),
@@ -57,7 +69,48 @@ export async function updateAttachmentConfig(
   }
 }
 
+export async function createAnswerSlide(
+  questionId: string,
+  content: string = "# New Section\n\nStart writing your content here...",
+  position: number = 0
+): Promise<{ success: boolean; dbId?: string; error?: string }> {
+  await requireAdmin();
+  const session = await getSession();
+  if (!session) return { success: false, error: "Unauthorized" };
+
+  // Validate questionId format (PocketBase IDs are 15 alphanumeric chars)
+  if (!/^[a-zA-Z0-9]{15}$/.test(questionId)) {
+    return { success: false, error: "Invalid question ID format" };
+  }
+
+  const pb = getAuthenticatedPb(session.token);
+
+  try {
+    const newAnswer = await pb.collection("answers").create({
+      question: questionId,
+      answer: content,
+      position: position,
+    });
+
+    return { success: true, dbId: newAnswer.id };
+  } catch (error) {
+    console.error("Error creating answer slide:", error);
+    return { success: false, error: "Failed to create answer slide" };
+  }
+}
+
 export async function saveAnswers(questionId: string, slides: AnswerSlide[]) {
+  await requireAdmin();
+  const session = await getSession();
+  if (!session) return { success: false, error: "Unauthorized" };
+  
+  // Validate questionId format (PocketBase IDs are 15 alphanumeric chars)
+  if (!/^[a-zA-Z0-9]{15}$/.test(questionId)) {
+    return { success: false, error: "Invalid question ID format" };
+  }
+  
+  const pb = getAuthenticatedPb(session.token);
+
   try {
     // Get existing answers for this question
     const existingAnswers = await pb.collection("answers").getFullList({
@@ -98,3 +151,4 @@ export async function saveAnswers(questionId: string, slides: AnswerSlide[]) {
     return { success: false, error: "Failed to save answers" };
   }
 }
+

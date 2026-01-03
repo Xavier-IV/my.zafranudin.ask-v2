@@ -223,16 +223,6 @@ export default function HomeClient({ initialMode }: HomeClientProps) {
               </div>
             )}
             
-            <div className="flex justify-center py-2">
-              <Turnstile
-                ref={turnstileRef}
-                siteKey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY!}
-                onSuccess={(token) => setTurnstileToken(token)}
-                onExpire={() => setTurnstileToken(null)}
-                onError={() => setTurnstileToken(null)}
-              />
-            </div>
-
             <Button
               type="submit"
               disabled={pending || message.trim().length < 2 || !turnstileToken}
@@ -249,6 +239,16 @@ export default function HomeClient({ initialMode }: HomeClientProps) {
                 "Send Feedback"
               )}
             </Button>
+
+            <div className="flex justify-center py-2">
+              <Turnstile
+                ref={turnstileRef}
+                siteKey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY!}
+                onSuccess={(token) => setTurnstileToken(token)}
+                onExpire={() => setTurnstileToken(null)}
+                onError={() => setTurnstileToken(null)}
+              />
+            </div>
           </form>
 
           <footer className="text-center space-y-2">

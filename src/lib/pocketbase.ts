@@ -15,4 +15,12 @@ pb.beforeSend = function (url, options) {
   return { url, options };
 };
 
+export function getAuthenticatedPb(token: string): PocketBase {
+  const authPb = new PocketBase(
+    process.env.POCKETBASE_URL || "http://127.0.0.1:8090"
+  );
+  authPb.authStore.save(token, null);
+  return authPb;
+}
+
 export default pb;
