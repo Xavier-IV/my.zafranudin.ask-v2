@@ -4,7 +4,7 @@ import { useRef, useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { Download, ArrowLeft, Type, Plus, Minus, RotateCcw, FilePlus, Trash2, LayoutTemplate, AlignLeft, AlignCenter, Save, GripVertical, Grid3x3, Rows3, Image } from "lucide-react";
+import { Download, ArrowLeft, Type, Plus, Minus, RotateCcw, FilePlus, Trash2, LayoutTemplate, AlignLeft, AlignCenter, Save, GripVertical, Grid3x3, Rows3, Image, AlertTriangle } from "lucide-react";
 import { toPng } from "html-to-image";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
@@ -14,6 +14,14 @@ import remarkGfm from "remark-gfm";
 import { Textarea } from "@/components/ui/textarea";
 import { saveAnswers, uploadAnswerAttachment, updateAttachmentConfig, createAnswerSlide } from "../answer-actions";
 import { toast } from "sonner";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 import {
   DndContext,
@@ -92,6 +100,7 @@ export default function ViewClient({ initialQuestion, id, initialAnswers, fileTo
   const [isCapturingId, setIsCapturingId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [viewMode, setViewMode] = useState<'editor' | 'grid'>('editor');
+  const [slideToDelete, setSlideToDelete] = useState<string | null>(null);
   
   const [slides, setSlides] = useState<Slide[]>(() => {
     const questionSlide: Slide = { 
@@ -309,9 +318,16 @@ export default function ViewClient({ initialQuestion, id, initialAnswers, fileTo
     }
   };
 
-  const removeSlide = (id: string) => {
+  const confirmDeleteSlide = (id: string) => {
     if (id === "q") return;
-    setSlides(prev => prev.filter(s => s.id !== id));
+    setSlideToDelete(id);
+  };
+
+  const removeSlide = () => {
+    if (!slideToDelete || slideToDelete === "q") return;
+    setSlides(prev => prev.filter(s => s.id !== slideToDelete));
+    setSlideToDelete(null);
+    toast.success("Slide deleted");
   };
 
   const updateSlideData = (slideId: string, updates: Partial<Slide>) => {
@@ -559,7 +575,7 @@ export default function ViewClient({ initialQuestion, id, initialAnswers, fileTo
                       key={slide.id}
                       slide={slide}
                       index={index}
-                      removeSlide={removeSlide}
+                      confirmDeleteSlide={confirmDeleteSlide}
                     />
                   ))}
                   
@@ -604,7 +620,7 @@ export default function ViewClient({ initialQuestion, id, initialAnswers, fileTo
                     updateSlideFontSize={updateSlideFontSize}
                     toggleTemplate={toggleTemplate}
                     downloadAsPng={downloadAsPng}
-                    removeSlide={removeSlide}
+                    confirmDeleteSlide={confirmDeleteSlide}
                     updateSlideData={updateSlideData}
                     renderInnerContent={renderInnerContent}
                     getFontSizeClass={getFontSizeClass}
@@ -653,11 +669,34 @@ export default function ViewClient({ initialQuestion, id, initialAnswers, fileTo
           <span>SYSTEM v2.5</span>
         </div>
       </main>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={!!slideToDelete} onOpenChange={(open) => !open && setSlideToDelete(null)}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              Delete Slide
+            </DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete this slide? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-1.5">
+            <Button variant="outline" onClick={() => setSlideToDelete(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={removeSlide}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
-function GridSlideCard({ slide, index, removeSlide }: { slide: Slide; index: number; removeSlide: (id: string) => void }) {
+function GridSlideCard({ slide, index, confirmDeleteSlide }: { slide: Slide; index: number; confirmDeleteSlide: (id: string) => void }) {
   const {
     attributes,
     listeners,
@@ -700,7 +739,7 @@ function GridSlideCard({ slide, index, removeSlide }: { slide: Slide; index: num
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                removeSlide(slide.id);
+                confirmDeleteSlide(slide.id);
               }}
               className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-destructive/10 rounded"
             >
@@ -736,7 +775,7 @@ function SortableSlide({
   updateSlideFontSize, 
   toggleTemplate, 
   downloadAsPng, 
-  removeSlide, 
+  confirmDeleteSlide, 
   updateSlideData, 
   renderInnerContent,
   getFontSizeClass,
@@ -869,7 +908,7 @@ function SortableSlide({
           </Button>
 
           {slide.type === "answer" && (
-            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-destructive hover:bg-destructive/10" onClick={() => removeSlide(slide.id)}>
+            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-destructive hover:bg-destructive/10" onClick={() => confirmDeleteSlide(slide.id)}>
               <Trash2 className="h-4 w-4" />
             </Button>
           )}
