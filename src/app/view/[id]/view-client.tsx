@@ -4,7 +4,7 @@ import { useRef, useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { Download, ArrowLeft, Type, Plus, Minus, RotateCcw, FilePlus, Trash2, LayoutTemplate, AlignLeft, AlignCenter, Save, GripVertical } from "lucide-react";
+import { Download, ArrowLeft, Type, Plus, Minus, RotateCcw, FilePlus, Trash2, LayoutTemplate, AlignLeft, AlignCenter, Save, GripVertical, Grid3x3, Rows3 } from "lucide-react";
 import { toPng } from "html-to-image";
 import { useSearchParams } from "next/navigation";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -73,6 +73,7 @@ export default function ViewClient({ initialQuestion, id, initialAnswers }: View
   const [mounted, setMounted] = useState(false);
   const [isCapturingId, setIsCapturingId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [viewMode, setViewMode] = useState<'editor' | 'grid'>('editor');
   
   const [slides, setSlides] = useState<Slide[]>(() => {
     const questionSlide: Slide = { 
@@ -396,6 +397,22 @@ export default function ViewClient({ initialQuestion, id, initialAnswers }: View
             </TooltipContent>
           </Tooltip>
 
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                className="rounded-xl"
+                onClick={() => setViewMode(viewMode === 'editor' ? 'grid' : 'editor')}
+              >
+                {viewMode === 'editor' ? <Grid3x3 className="h-5 w-5" /> : <Rows3 className="h-5 w-5" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              {viewMode === 'editor' ? 'Grid View' : 'Editor View'}
+            </TooltipContent>
+          </Tooltip>
+
           <div className="mt-auto">
             <ThemeToggle />
           </div>
@@ -405,68 +422,110 @@ export default function ViewClient({ initialQuestion, id, initialAnswers }: View
       {/* Main Artboard Area */}
       <main 
         ref={containerRef}
-        className="flex-1 relative bg-muted/5 overflow-x-auto overflow-y-hidden flex items-center px-12 gap-16 overscroll-x-none"
-        style={{ overscrollBehaviorX: 'none' }}
+        className="flex-1 relative bg-muted/5 overflow-auto"
       >
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragEnd={handleDragEnd}
-        >
-          <SortableContext
-            items={slides.map(s => s.id)}
-            strategy={horizontalListSortingStrategy}
-          >
-            {slides.map((slide, index) => (
-              <SortableSlide
-                key={slide.id}
-                slide={slide}
-                index={index}
-                isAdmin={isAdmin}
-                isCapturingId={isCapturingId}
-                scale={scale}
-                slideRefs={slideRefs}
-                updateSlideFontSize={updateSlideFontSize}
-                toggleTemplate={toggleTemplate}
-                downloadAsPng={downloadAsPng}
-                removeSlide={removeSlide}
-                updateSlideData={updateSlideData}
-                renderInnerContent={renderInnerContent}
-                getFontSizeClass={getFontSizeClass}
-              />
-            ))}
-          </SortableContext>
-        </DndContext>
-        
-        {isAdmin && (
-          <div className="flex flex-col gap-4 items-center shrink-0">
-            {/* Spacer for controls alignment */}
-            <div className="h-8 w-8" />
-            
-            <button 
-              onClick={addAnswerSlide}
-              className="relative group border-2 border-dashed border-border/40 hover:border-primary/40 bg-muted/5 hover:bg-muted/10 transition-all duration-300 ease-out rounded-sm flex items-center justify-center cursor-pointer overflow-hidden"
-              style={{ 
-                width: '600px', 
-                height: '600px',
-                transform: `scale(${scale})`,
-                transformOrigin: 'top center'
-              }}
+        {viewMode === 'grid' ? (
+          /* Grid View */
+          <div className="p-12">
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
             >
-              <div className="flex flex-col items-center gap-4 transition-transform duration-300 group-hover:scale-110">
-                <div className="w-16 h-16 rounded-full bg-background border border-border flex items-center justify-center shadow-sm group-hover:shadow-md group-hover:border-primary/30 transition-all">
-                  <Plus className="h-8 w-8 text-muted-foreground/40 group-hover:text-primary/60 transition-colors" />
+              <SortableContext
+                items={slides.map(s => s.id)}
+                strategy={horizontalListSortingStrategy}
+              >
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 auto-rows-max">
+                  {slides.map((slide, index) => (
+                    <GridSlideCard
+                      key={slide.id}
+                      slide={slide}
+                      index={index}
+                      removeSlide={removeSlide}
+                    />
+                  ))}
+                  
+                  {isAdmin && (
+                    <button 
+                      onClick={addAnswerSlide}
+                      className="aspect-square border-2 border-dashed border-border/40 hover:border-primary/40 bg-muted/5 hover:bg-muted/10 transition-all duration-300 ease-out rounded-lg flex items-center justify-center cursor-pointer group"
+                    >
+                      <div className="flex flex-col items-center gap-3">
+                        <div className="w-12 h-12 rounded-full bg-background border border-border flex items-center justify-center group-hover:border-primary/30 transition-all">
+                          <Plus className="h-6 w-6 text-muted-foreground/40 group-hover:text-primary/60 transition-colors" />
+                        </div>
+                        <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground/30 group-hover:text-primary/50 transition-colors">Add Page</span>
+                      </div>
+                    </button>
+                  )}
                 </div>
-                <span className="text-xs font-bold uppercase tracking-[0.2em] text-muted-foreground/30 group-hover:text-primary/50 transition-colors">Add Page</span>
-              </div>
-            </button>
+              </SortableContext>
+            </DndContext>
+          </div>
+        ) : (
+          /* Editor View */
+          <div className="flex items-center px-12 gap-16 h-full overflow-x-auto overflow-y-hidden" style={{ overscrollBehaviorX: 'none' }}>
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext
+                items={slides.map(s => s.id)}
+                strategy={horizontalListSortingStrategy}
+              >
+                {slides.map((slide, index) => (
+                  <SortableSlide
+                    key={slide.id}
+                    slide={slide}
+                    index={index}
+                    isAdmin={isAdmin}
+                    isCapturingId={isCapturingId}
+                    scale={scale}
+                    slideRefs={slideRefs}
+                    updateSlideFontSize={updateSlideFontSize}
+                    toggleTemplate={toggleTemplate}
+                    downloadAsPng={downloadAsPng}
+                    removeSlide={removeSlide}
+                    updateSlideData={updateSlideData}
+                    renderInnerContent={renderInnerContent}
+                    getFontSizeClass={getFontSizeClass}
+                  />
+                ))}
+              </SortableContext>
+            </DndContext>
             
-            <span className="text-[10px] font-black font-mono text-muted-foreground/10 uppercase tracking-[0.3em] select-none">
-              New Artboard
-            </span>
+            {isAdmin && (
+              <div className="flex flex-col gap-4 items-center shrink-0">
+                {/* Spacer for controls alignment */}
+                <div className="h-8 w-8" />
+                
+                <button 
+                  onClick={addAnswerSlide}
+                  className="relative group border-2 border-dashed border-border/40 hover:border-primary/40 bg-muted/5 hover:bg-muted/10 transition-all duration-300 ease-out rounded-sm flex items-center justify-center cursor-pointer overflow-hidden"
+                  style={{ 
+                    width: '600px', 
+                    height: '600px',
+                    transform: `scale(${scale})`,
+                    transformOrigin: 'top center'
+                  }}
+                >
+                  <div className="flex flex-col items-center gap-4 transition-transform duration-300 group-hover:scale-110">
+                    <div className="w-16 h-16 rounded-full bg-background border border-border flex items-center justify-center shadow-sm group-hover:shadow-md group-hover:border-primary/30 transition-all">
+                      <Plus className="h-8 w-8 text-muted-foreground/40 group-hover:text-primary/60 transition-colors" />
+                    </div>
+                    <span className="text-xs font-bold uppercase tracking-[0.2em] text-muted-foreground/30 group-hover:text-primary/50 transition-colors">Add Page</span>
+                  </div>
+                </button>
+                
+                <span className="text-[10px] font-black font-mono text-muted-foreground/10 uppercase tracking-[0.3em] select-none">
+                  New Artboard
+                </span>
+              </div>
+            )}
           </div>
         )}
-
 
         {/* Info Overlay */}
         <div className="fixed bottom-6 right-6 text-[10px] font-mono text-muted-foreground/40 pointer-events-none uppercase tracking-widest flex gap-4">
@@ -475,6 +534,75 @@ export default function ViewClient({ initialQuestion, id, initialAnswers }: View
           <span>SYSTEM v2.5</span>
         </div>
       </main>
+    </div>
+  );
+}
+
+function GridSlideCard({ slide, index, removeSlide }: { slide: Slide; index: number; removeSlide: (id: string) => void }) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging
+  } = useSortable({ id: slide.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 50 : undefined,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  // Truncate content for grid view
+  const getTruncatedContent = (content: string, maxLength: number = 80) => {
+    const plainText = content.replace(/<[^>]*>/g, '').replace(/[#*_`]/g, '').trim();
+    return plainText.length > maxLength ? plainText.substring(0, maxLength) + '...' : plainText;
+  };
+
+  return (
+    <div 
+      ref={setNodeRef} 
+      style={style}
+      className="relative group aspect-square"
+    >
+      <div 
+        className="w-full h-full bg-background border-2 border-border hover:border-primary/50 rounded-lg p-4 flex flex-col gap-3 cursor-grab active:cursor-grabbing transition-all duration-200 hover:shadow-lg"
+        {...attributes}
+        {...listeners}
+      >
+        {/* Slide Type Badge */}
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-mono font-bold text-muted-foreground/40 uppercase tracking-wider">
+            {slide.type === 'question' ? 'Question' : `Answer ${index}`}
+          </span>
+          {slide.type === 'answer' && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                removeSlide(slide.id);
+              }}
+              className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-destructive/10 rounded"
+            >
+              <Trash2 className="h-3 w-3 text-destructive" />
+            </button>
+          )}
+        </div>
+
+        {/* Content Preview */}
+        <div className="flex-1 flex items-center justify-center text-center px-2">
+          <p className="text-sm font-medium text-foreground/70 line-clamp-4 leading-relaxed">
+            {getTruncatedContent(slide.content, 120)}
+          </p>
+        </div>
+
+        {/* Footer Info */}
+        <div className="flex items-center justify-between text-[9px] text-muted-foreground/30 font-mono uppercase tracking-wider">
+          <span>Page {index + 1}</span>
+          <span className="capitalize">{slide.template}</span>
+        </div>
+      </div>
     </div>
   );
 }
