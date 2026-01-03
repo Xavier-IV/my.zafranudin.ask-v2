@@ -55,5 +55,9 @@ export default async function ViewPage({ params }: { params: Params }) {
     console.error("Error fetching answers:", error);
   }
 
-  return <ViewClient initialQuestion={question.question} id={id} initialAnswers={answers} />;
+  // Note: File token not needed if attachment field is not marked as "Protected" in PocketBase
+  // If you need protected files, authenticate pb instance first or mark field as public
+  const fileToken = "";
+
+  return <ViewClient initialQuestion={question.question} id={id} initialAnswers={answers} fileToken={fileToken} />;
 }

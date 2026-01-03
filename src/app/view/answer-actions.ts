@@ -10,6 +10,53 @@ export interface AnswerSlide {
   position: number;
 }
 
+export async function uploadAnswerAttachment(
+  answerId: string,
+  questionId: string,
+  formData: FormData
+): Promise<{ success: boolean; attachment?: string; error?: string }> {
+  try {
+    // Verify the answer belongs to the question
+    const answer = await pb.collection("answers").getOne(answerId);
+    if (answer.question !== questionId) {
+      return { success: false, error: "Answer does not belong to this question" };
+    }
+
+    // Upload the file
+    const updatedAnswer = await pb.collection("answers").update(answerId, formData);
+    
+    return { 
+      success: true, 
+      attachment: updatedAnswer.attachment 
+    };
+  } catch (error) {
+    console.error("Error uploading attachment:", error);
+    return { success: false, error: "Failed to upload attachment" };
+  }
+}
+
+export interface AttachmentConfig {
+  mode: "full" | "overlay";
+  position: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+  size: "sm" | "md" | "lg";
+}
+
+export async function updateAttachmentConfig(
+  answerId: string,
+  config: AttachmentConfig
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    await pb.collection("answers").update(answerId, {
+      attachment_config: JSON.stringify(config),
+    });
+    
+    return { success: true };
+  } catch (error) {
+    console.error("Error updating attachment config:", error);
+    return { success: false, error: "Failed to update attachment config" };
+  }
+}
+
 export async function saveAnswers(questionId: string, slides: AnswerSlide[]) {
   try {
     // Get existing answers for this question

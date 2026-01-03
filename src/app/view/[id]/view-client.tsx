@@ -4,7 +4,7 @@ import { useRef, useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { Download, ArrowLeft, Type, Plus, Minus, RotateCcw, FilePlus, Trash2, LayoutTemplate, AlignLeft, AlignCenter, Save, GripVertical, Grid3x3, Rows3 } from "lucide-react";
+import { Download, ArrowLeft, Type, Plus, Minus, RotateCcw, FilePlus, Trash2, LayoutTemplate, AlignLeft, AlignCenter, Save, GripVertical, Grid3x3, Rows3, Image } from "lucide-react";
 import { toPng } from "html-to-image";
 import { useSearchParams } from "next/navigation";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -13,7 +13,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { Textarea } from "@/components/ui/textarea";
-import { saveAnswers } from "../answer-actions";
+import { saveAnswers, uploadAnswerAttachment, updateAttachmentConfig } from "../answer-actions";
 import { toast } from "sonner";
 
 import {
@@ -36,10 +36,23 @@ import { CSS } from '@dnd-kit/utilities';
 
 import { cn } from "@/lib/utils";
 
+// Attachment configuration type
+export type ImageMode = "full" | "overlay";
+export type ImagePosition = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+export type ImageSize = "sm" | "md" | "lg";
+
+export interface AttachmentConfig {
+  mode: ImageMode;
+  position: ImagePosition;
+  size: ImageSize;
+}
+
 interface Answer {
   id: string;
   question: string;
   answer: string;
+  attachment?: string;
+  attachment_config?: AttachmentConfig | string; // Can be JSON string from DB
   position: number;
   created: string;
   updated: string;
@@ -49,6 +62,7 @@ type ViewClientProps = {
   initialQuestion: string;
   id: string;
   initialAnswers: Answer[];
+  fileToken: string;
 };
 
 type FontSize = "auto" | "sm" | "md" | "lg" | "xl" | "2xl" | "3xl";
@@ -64,9 +78,14 @@ interface Slide {
   title?: string;
   content: string;
   fontSize: FontSize;
+  attachment?: string;
+  attachmentUrl?: string;
+  imageMode?: ImageMode;
+  imagePosition?: ImagePosition;
+  imageSize?: ImageSize;
 }
 
-export default function ViewClient({ initialQuestion, id, initialAnswers }: ViewClientProps) {
+export default function ViewClient({ initialQuestion, id, initialAnswers, fileToken }: ViewClientProps) {
   const searchParams = useSearchParams();
   const isAdmin = searchParams.get("admin") === "true";
   const containerRef = useRef<HTMLDivElement>(null);
@@ -84,14 +103,38 @@ export default function ViewClient({ initialQuestion, id, initialAnswers }: View
       fontSize: "auto" 
     };
     
-    const answerSlides: Slide[] = initialAnswers.map((answer, index) => ({
-      id: `answer-${index}`,
-      dbId: answer.id,
-      type: "answer" as const,
-      template: "left" as const,
-      content: answer.answer,
-      fontSize: "auto" as const,
-    }));
+    const answerSlides: Slide[] = initialAnswers.map((answer, index) => {
+      // Use Next.js API route to proxy file requests (keeps PocketBase URL hidden)
+      const attachmentUrl = answer.attachment 
+        ? `/api/files/answers/${answer.id}/${answer.attachment}`
+        : undefined;
+      
+      // Parse attachment config from database
+      let config: AttachmentConfig | null = null;
+      if (answer.attachment_config) {
+        try {
+          config = typeof answer.attachment_config === 'string' 
+            ? JSON.parse(answer.attachment_config) 
+            : answer.attachment_config;
+        } catch (e) {
+          console.error('Failed to parse attachment_config:', e);
+        }
+      }
+      
+      return {
+        id: `answer-${index}`,
+        dbId: answer.id,
+        type: "answer" as const,
+        template: "left" as const,
+        content: answer.answer,
+        fontSize: "auto" as const,
+        attachment: answer.attachment,
+        attachmentUrl,
+        imageMode: config?.mode || "full",
+        imagePosition: config?.position || "top-right",
+        imageSize: config?.size || "md",
+      };
+    });
     
     return [questionSlide, ...answerSlides];
   });
@@ -258,8 +301,33 @@ export default function ViewClient({ initialQuestion, id, initialAnswers }: View
     setSlides(prev => prev.filter(s => s.id !== id));
   };
 
-  const updateSlideData = (id: string, updates: Partial<Slide>) => {
-    setSlides(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
+  const updateSlideData = (slideId: string, updates: Partial<Slide>) => {
+    // Update state immediately for UI responsiveness
+    setSlides(prev => prev.map(s => s.id === slideId ? { ...s, ...updates } : s));
+    
+    // Check if attachment config changed
+    const configChanged = updates.imageMode !== undefined || 
+                         updates.imagePosition !== undefined || 
+                         updates.imageSize !== undefined;
+    
+    // Save to database asynchronously (outside of render)
+    if (configChanged) {
+      // Get the updated slide to save
+      const slideToSave = slides.find(s => s.id === slideId);
+      if (slideToSave?.dbId && slideToSave?.attachment) {
+        const config: AttachmentConfig = {
+          mode: updates.imageMode ?? slideToSave.imageMode ?? "full",
+          position: updates.imagePosition ?? slideToSave.imagePosition ?? "top-right",
+          size: updates.imageSize ?? slideToSave.imageSize ?? "md",
+        };
+        
+        // Save config to database (async, don't block UI)
+        updateAttachmentConfig(slideToSave.dbId, config).catch(err => {
+          console.error("Failed to save attachment config:", err);
+          toast.error("Failed to save image settings");
+        });
+      }
+    }
   };
 
   const handleSave = async (currentSlides?: Slide[]) => {
@@ -295,6 +363,71 @@ export default function ViewClient({ initialQuestion, id, initialAnswers }: View
     const isCentered = slide.template === "centered";
     const commonClasses = "leading-relaxed prose prose-neutral dark:prose-invert transition-all duration-200";
     
+    // If slide has an attachment
+    if (slide.attachment && slide.attachmentUrl) {
+      const imageMode = slide.imageMode || "full";
+      const imageSize = slide.imageSize || "md";
+      
+      // Size classes for overlay mode (small positioned images)
+      const overlaySizeClasses = {
+        sm: "w-24 h-24",
+        md: "w-32 h-32",
+        lg: "w-40 h-40",
+      };
+      
+      // Size classes for full mode (percentage-based)
+      const fullSizeClasses = {
+        sm: "max-w-[60%] max-h-[60%]",
+        md: "max-w-full max-h-full",
+        lg: "w-full h-full",
+      };
+      
+      // Full image mode - image replaces content
+      if (imageMode === "full") {
+        return (
+          <div className="flex items-center justify-center w-full h-full">
+            <img 
+              src={slide.attachmentUrl} 
+              alt="Answer attachment" 
+              className={cn("object-contain rounded-lg", fullSizeClasses[imageSize])}
+            />
+          </div>
+        );
+      }
+      
+      // Overlay mode - small image with text
+      if (imageMode === "overlay") {
+        const position = slide.imagePosition || "top-right";
+        const positionClasses = {
+          "top-left": "top-0 left-0",
+          "top-right": "top-0 right-0",
+          "bottom-left": "bottom-0 left-0",
+          "bottom-right": "bottom-0 right-0",
+        };
+        
+        return (
+          <div className="relative w-full h-full">
+            {/* Text content */}
+            <div className={cn(commonClasses, " [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", isCentered ? "font-semibold text-center" : "font-medium text-left", getFontSizeClass(slide))}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {slide.content}
+              </ReactMarkdown>
+            </div>
+            
+            {/* Overlay image */}
+            <div className={cn("absolute", overlaySizeClasses[imageSize], positionClasses[position])}>
+              <img 
+                src={slide.attachmentUrl} 
+                alt="Answer attachment" 
+                className="w-full h-full object-cover rounded-lg shadow-lg"
+              />
+            </div>
+          </div>
+        );
+      }
+    }
+    
+    // No attachment - show text only
     if (slide.type === "question") {
       return (
         <div 
@@ -491,6 +624,8 @@ export default function ViewClient({ initialQuestion, id, initialAnswers }: View
                     updateSlideData={updateSlideData}
                     renderInnerContent={renderInnerContent}
                     getFontSizeClass={getFontSizeClass}
+                    questionId={id}
+                    fileToken={fileToken}
                   />
                 ))}
               </SortableContext>
@@ -620,8 +755,13 @@ function SortableSlide({
   removeSlide, 
   updateSlideData, 
   renderInnerContent,
-  getFontSizeClass 
+  getFontSizeClass,
+  questionId,
+  fileToken
 }: any) {
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+
   const {
     attributes,
     listeners,
@@ -630,6 +770,68 @@ function SortableSlide({
     transition,
     isDragging
   } = useSortable({ id: slide.id });
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (isAdmin && slide.type === "answer" && slide.dbId) {
+      setIsDragOver(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+
+    if (!isAdmin || slide.type !== "answer" || !slide.dbId) return;
+
+    const files = e.dataTransfer.files;
+    if (files.length === 0) return;
+
+    const file = files[0];
+    
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      toast.error("Please upload an image file");
+      return;
+    }
+
+    setIsUploading(true);
+    
+    try {
+      const formData = new FormData();
+      formData.append('attachment', file);
+
+      const result = await uploadAnswerAttachment(slide.dbId, questionId, formData);
+      
+      if (result.success && result.attachment) {
+        // Update the slide with the new attachment (using Next.js API proxy)
+        const attachmentUrl = `/api/files/answers/${slide.dbId}/${result.attachment}`;
+        updateSlideData(slide.id, { 
+          attachment: result.attachment,
+          attachmentUrl,
+          imageMode: slide.imageMode || "full",
+          imagePosition: slide.imagePosition || "top-right",
+          imageSize: slide.imageSize || "md",
+        });
+        toast.success("Image uploaded successfully!");
+      } else {
+        toast.error(result.error || "Failed to upload image");
+      }
+    } catch (error) {
+      console.error("Error uploading file:", error);
+      toast.error("Failed to upload image");
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -692,15 +894,41 @@ function SortableSlide({
 
       {/* Actual Slide Card */}
       <div 
-        className="relative shadow-[0_32px_64px_-12px_rgba(0,0,0,0.2)] bg-background transition-all duration-300 ease-out"
+        className={cn(
+          "relative shadow-[0_32px_64px_-12px_rgba(0,0,0,0.2)] bg-background transition-all duration-300 ease-out",
+          isDragOver && "ring-4 ring-primary ring-offset-2",
+          isUploading && "opacity-50 pointer-events-none"
+        )}
         style={{ 
           width: '600px', 
           height: '600px',
           transform: `scale(${scale})`,
           transformOrigin: 'top center'
         }}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
       >
         <div className="absolute inset-0 border border-border pointer-events-none z-10 opacity-30" />
+        
+        {/* Upload indicator */}
+        {isUploading && (
+          <div className="absolute inset-0 flex items-center justify-center z-50 bg-background/80">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+              <p className="text-sm font-medium">Uploading image...</p>
+            </div>
+          </div>
+        )}
+        
+        {/* Drag overlay */}
+        {isDragOver && (
+          <div className="absolute inset-0 flex items-center justify-center z-40 bg-primary/10 backdrop-blur-sm">
+            <div className="text-center">
+              <p className="text-lg font-bold text-primary">Drop image here</p>
+            </div>
+          </div>
+        )}
         
         <div 
           ref={el => { slideRefs.current[slide.id] = el }} 
@@ -756,9 +984,115 @@ function SortableSlide({
                    className="flex-1 resize-none leading-relaxed font-mono text-sm"
                  />
              </div>
+             
+             {/* Image controls - only show if attachment exists */}
+             {slide.attachment && (
+               <div className="space-y-3 border-t border-border pt-4">
+                 <label className="text-xs font-medium text-muted-foreground">Image Display</label>
+                 
+                 {/* Mode toggle */}
+                 <div className="flex gap-2">
+                   <Button
+                     variant={slide.imageMode === "full" ? "default" : "outline"}
+                     size="sm"
+                     className="flex-1 h-8 text-xs"
+                     onClick={() => updateSlideData(slide.id, { imageMode: "full" })}
+                   >
+                     <Image className="h-3 w-3 mr-1" />
+                     Full Image
+                   </Button>
+                   <Button
+                     variant={slide.imageMode === "overlay" ? "default" : "outline"}
+                     size="sm"
+                     className="flex-1 h-8 text-xs"
+                     onClick={() => updateSlideData(slide.id, { imageMode: "overlay" })}
+                   >
+                     <LayoutTemplate className="h-3 w-3 mr-1" />
+                     Overlay
+                   </Button>
+                 </div>
+                 
+                 {/* Position selector - only show in overlay mode */}
+                 {slide.imageMode === "overlay" && (
+                   <div className="space-y-2">
+                     <label className="text-xs font-medium text-muted-foreground">Position</label>
+                     <div className="grid grid-cols-2 gap-2">
+                       <Button
+                         variant={slide.imagePosition === "top-left" ? "default" : "outline"}
+                         size="sm"
+                         className="h-8 text-xs"
+                         onClick={() => updateSlideData(slide.id, { imagePosition: "top-left" })}
+                       >
+                         Top Left
+                       </Button>
+                       <Button
+                         variant={slide.imagePosition === "top-right" ? "default" : "outline"}
+                         size="sm"
+                         className="h-8 text-xs"
+                         onClick={() => updateSlideData(slide.id, { imagePosition: "top-right" })}
+                       >
+                         Top Right
+                       </Button>
+                       <Button
+                         variant={slide.imagePosition === "bottom-left" ? "default" : "outline"}
+                         size="sm"
+                         className="h-8 text-xs"
+                         onClick={() => updateSlideData(slide.id, { imagePosition: "bottom-left" })}
+                       >
+                         Bottom Left
+                       </Button>
+                       <Button
+                         variant={slide.imagePosition === "bottom-right" ? "default" : "outline"}
+                         size="sm"
+                         className="h-8 text-xs"
+                         onClick={() => updateSlideData(slide.id, { imagePosition: "bottom-right" })}
+                       >
+                         Bottom Right
+                       </Button>
+                     </div>
+                   </div>
+                 )}
+                 
+                 {/* Size selector */}
+                 <div className="space-y-2">
+                   <label className="text-xs font-medium text-muted-foreground">Size</label>
+                   <div className="flex gap-2">
+                     <Button
+                       variant={slide.imageSize === "sm" ? "default" : "outline"}
+                       size="sm"
+                       className="flex-1 h-8 text-xs"
+                       onClick={() => updateSlideData(slide.id, { imageSize: "sm" })}
+                     >
+                       Small
+                     </Button>
+                     <Button
+                       variant={slide.imageSize === "md" ? "default" : "outline"}
+                       size="sm"
+                       className="flex-1 h-8 text-xs"
+                       onClick={() => updateSlideData(slide.id, { imageSize: "md" })}
+                     >
+                       Medium
+                     </Button>
+                     <Button
+                       variant={slide.imageSize === "lg" ? "default" : "outline"}
+                       size="sm"
+                       className="flex-1 h-8 text-xs"
+                       onClick={() => updateSlideData(slide.id, { imageSize: "lg" })}
+                     >
+                       Large
+                     </Button>
+                   </div>
+                 </div>
+               </div>
+             )}
+             
              <div className="flex justify-between items-center text-[10px] text-muted-foreground/40 font-mono uppercase tracking-widest">
                <span>{slide.template.toUpperCase()} Template</span>
-               <span className="italic">Hover out to preview</span>
+               {slide.dbId ? (
+                 <span className="italic">Drag & drop image anywhere on card</span>
+               ) : (
+                 <span className="italic text-amber-500">Save first to enable image upload</span>
+               )}
              </div>
           </div>
         )}
