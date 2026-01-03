@@ -749,10 +749,12 @@ function GridSlideCard({ slide, index, confirmDeleteSlide }: { slide: Slide; ind
         </div>
 
         {/* Content Preview */}
-        <div className="flex-1 flex items-center justify-center text-center px-2">
-          <p className="text-sm font-medium text-foreground/70 line-clamp-4 leading-relaxed">
-            {getTruncatedContent(slide.content, 120)}
-          </p>
+        <div className="flex-1 flex items-center justify-center text-center px-2 overflow-hidden">
+          <div className="text-sm font-medium text-foreground/70 line-clamp-4 leading-relaxed prose prose-sm prose-neutral dark:prose-invert [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {slide.content}
+            </ReactMarkdown>
+          </div>
         </div>
 
         {/* Footer Info */}
