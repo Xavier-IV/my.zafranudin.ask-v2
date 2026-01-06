@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useActionState, useEffect } from "react";
+import { useState, useActionState, useEffect, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { loginAdmin } from "../actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,10 +13,19 @@ const initialState = {
   error: undefined as string | undefined,
 };
 
-export default function AdminLoginPage() {
+function LoginForm() {
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [state, formAction, pending] = useActionState(loginAdmin, initialState);
+
+  // Show session expired message if redirected with reason=expired
+  useEffect(() => {
+    const reason = searchParams.get("reason");
+    if (reason === "expired") {
+      toast.error("Your session has expired. Please log in again.");
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     if (state.error) {
@@ -97,5 +107,13 @@ export default function AdminLoginPage() {
         </div>
       </main>
     </div>
+  );
+}
+
+export default function AdminLoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-background" />}>
+      <LoginForm />
+    </Suspense>
   );
 }

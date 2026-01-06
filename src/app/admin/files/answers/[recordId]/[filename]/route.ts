@@ -1,4 +1,4 @@
-import { getSession } from "@/lib/session";
+import { getSession, clearSession } from "@/lib/session";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function GET(
@@ -34,6 +34,15 @@ export async function GET(
     });
 
     if (!response.ok) {
+      // If it's an auth error, clear the session
+      if (response.status === 401 || response.status === 403) {
+        await clearSession();
+        return NextResponse.json(
+          { error: "Session expired. Please log in again." },
+          { status: 401 }
+        );
+      }
+
       return NextResponse.json(
         { error: "File not found" },
         { status: response.status }

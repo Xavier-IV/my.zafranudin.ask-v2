@@ -1,5 +1,5 @@
 import { requireAdmin, getAdminEmail, logoutAdmin } from "./actions";
-import { getAuthenticatedPb } from "@/lib/pocketbase";
+import { getAuthenticatedPb, withAuthErrorHandler } from "@/lib/pocketbase";
 import { getSession } from "@/lib/session";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -36,14 +36,18 @@ export default async function AdminDashboard() {
   }
   const pb = getAuthenticatedPb(session.token);
 
-  // Fetch questions and feedbacks
-  const questions = await pb.collection("questions").getFullList<Question>({
-    sort: "-created",
-  });
+  // Fetch questions and feedbacks with error handling
+  const questions = await withAuthErrorHandler(() =>
+    pb.collection("questions").getFullList<Question>({
+      sort: "-created",
+    })
+  );
 
-  const feedbacks = await pb.collection("feedbacks").getFullList<Feedback>({
-    sort: "-created",
-  });
+  const feedbacks = await withAuthErrorHandler(() =>
+    pb.collection("feedbacks").getFullList<Feedback>({
+      sort: "-created",
+    })
+  );
 
   return (
     <div className="relative min-h-screen bg-background selection:bg-primary/10">

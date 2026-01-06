@@ -1,9 +1,10 @@
 "use server";
 
-import pb from "@/lib/pocketbase";
+import pb, { getAuthenticatedPb } from "@/lib/pocketbase";
 import { setSession, clearSession, getSession } from "@/lib/session";
 import { redirect } from "next/navigation";
 import { z } from "zod";
+import { isPocketBaseAuthError, handleAuthError } from "@/lib/pocketbase-errors";
 
 const loginSchema = z.object({
   email: z.string().trim().email("Please enter a valid email address"),
@@ -60,6 +61,21 @@ export async function requireAdmin(): Promise<void> {
   const session = await getSession();
   if (!session) {
     redirect("/admin/login");
+  }
+
+  // Proactively validate the token with PocketBase to catch expired sessions
+  try {
+    const authenticatedPb = getAuthenticatedPb(session.token);
+    // Make a lightweight API call to verify the token is still valid
+    // This will throw a 401/403 error if the token is expired/invalid
+    await authenticatedPb.admins.authRefresh();
+  } catch (error) {
+    console.error("Token validation error:", error);
+    if (isPocketBaseAuthError(error)) {
+      await handleAuthError("expired");
+    }
+    // If it's not an auth error, rethrow it
+    throw error;
   }
 }
 

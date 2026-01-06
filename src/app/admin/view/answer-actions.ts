@@ -1,6 +1,6 @@
 "use server";
 
-import { getAuthenticatedPb } from "@/lib/pocketbase";
+import { getAuthenticatedPb, withAuthErrorHandler } from "@/lib/pocketbase";
 import { getSession } from "@/lib/session";
 import { requireAdmin } from "../actions";
 
@@ -24,17 +24,21 @@ export async function uploadAnswerAttachment(
 
   try {
     // Verify the answer belongs to the question
-    const answer = await pb.collection("answers").getOne(answerId);
+    const answer = await withAuthErrorHandler(() =>
+      pb.collection("answers").getOne(answerId)
+    );
     if (answer.question !== questionId) {
       return { success: false, error: "Answer does not belong to this question" };
     }
 
     // Upload the file
-    const updatedAnswer = await pb.collection("answers").update(answerId, formData);
-    
-    return { 
-      success: true, 
-      attachment: updatedAnswer.attachment 
+    const updatedAnswer = await withAuthErrorHandler(() =>
+      pb.collection("answers").update(answerId, formData)
+    );
+
+    return {
+      success: true,
+      attachment: updatedAnswer.attachment
     };
   } catch (error) {
     console.error("Error uploading attachment:", error);
@@ -58,10 +62,12 @@ export async function updateAttachmentConfig(
   const pb = getAuthenticatedPb(session.token);
 
   try {
-    await pb.collection("answers").update(answerId, {
-      attachment_config: JSON.stringify(config),
-    });
-    
+    await withAuthErrorHandler(() =>
+      pb.collection("answers").update(answerId, {
+        attachment_config: JSON.stringify(config),
+      })
+    );
+
     return { success: true };
   } catch (error) {
     console.error("Error updating attachment config:", error);
@@ -86,11 +92,13 @@ export async function createAnswerSlide(
   const pb = getAuthenticatedPb(session.token);
 
   try {
-    const newAnswer = await pb.collection("answers").create({
-      question: questionId,
-      answer: content,
-      position: position,
-    });
+    const newAnswer = await withAuthErrorHandler(() =>
+      pb.collection("answers").create({
+        question: questionId,
+        answer: content,
+        position: position,
+      })
+    );
 
     return { success: true, dbId: newAnswer.id };
   } catch (error) {
@@ -113,9 +121,11 @@ export async function saveAnswers(questionId: string, slides: AnswerSlide[]) {
 
   try {
     // Get existing answers for this question
-    const existingAnswers = await pb.collection("answers").getFullList({
-      filter: `question = "${questionId}"`,
-    });
+    const existingAnswers = await withAuthErrorHandler(() =>
+      pb.collection("answers").getFullList({
+        filter: `question = "${questionId}"`,
+      })
+    );
 
     const existingIds = new Set(existingAnswers.map((a) => a.id));
     const updatedIds = new Set(slides.filter((s) => s.dbId).map((s) => s.dbId));
@@ -123,7 +133,7 @@ export async function saveAnswers(questionId: string, slides: AnswerSlide[]) {
     // Delete answers that were removed
     const toDelete = existingAnswers.filter((a) => !updatedIds.has(a.id));
     for (const answer of toDelete) {
-      await pb.collection("answers").delete(answer.id);
+      await withAuthErrorHandler(() => pb.collection("answers").delete(answer.id));
     }
 
     // Create or update slides
@@ -137,11 +147,12 @@ export async function saveAnswers(questionId: string, slides: AnswerSlide[]) {
       };
 
       if (slide.dbId && existingIds.has(slide.dbId)) {
-        // Update existing
-        await pb.collection("answers").update(slide.dbId, data);
+        // Update existing - extract dbId to ensure TypeScript type narrowing
+        const dbId = slide.dbId;
+        await withAuthErrorHandler(() => pb.collection("answers").update(dbId, data));
       } else {
         // Create new
-        await pb.collection("answers").create(data);
+        await withAuthErrorHandler(() => pb.collection("answers").create(data));
       }
     }
 

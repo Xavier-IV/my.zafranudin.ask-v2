@@ -2,7 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import ViewClient from "./view-client";
 import { Metadata } from "next";
 import { cache } from "react";
-import { getAuthenticatedPb } from "@/lib/pocketbase";
+import { getAuthenticatedPb, withAuthErrorHandler } from "@/lib/pocketbase";
 import { getSession } from "@/lib/session";
 import { requireAdmin } from "../../actions";
 
@@ -11,7 +11,7 @@ type Params = Promise<{ id: string }>;
 const getQuestion = cache(async (id: string, token: string) => {
   const pb = getAuthenticatedPb(token);
   try {
-    return await pb.collection("questions").getOne(id);
+    return await withAuthErrorHandler(() => pb.collection("questions").getOne(id));
   } catch (error: any) {
     console.error("PocketBase error fetching question:", {
       id,
@@ -62,10 +62,12 @@ export default async function ViewPage({ params }: { params: Params }) {
   // Fetch answers for this question
   let answers: any[] = [];
   try {
-    answers = await pb.collection("answers").getFullList({
-      filter: `question = "${id}"`,
-      sort: "position",
-    });
+    answers = await withAuthErrorHandler(() =>
+      pb.collection("answers").getFullList({
+        filter: `question = "${id}"`,
+        sort: "position",
+      })
+    );
   } catch (error) {
     console.error("Error fetching answers:", error);
   }
